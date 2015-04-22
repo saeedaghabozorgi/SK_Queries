@@ -1,0 +1,11 @@
+SELECT FLATTENED NODE_UNIQUE_NAME,
+(SELECT ATTRIBUTE_VALUE AS [Product 1],
+[Support] AS [Sequence Support], 
+[Probability] AS [Sequence Probability]
+FROM NODE_DISTRIBUTION) AS t
+FROM [real Constituents].CONTENT
+ 
+WHERE NODE_TYPE = 14
+AND [PARENT_UNIQUE_NAME] = 950257 
+and [NODE_UNIQUE_NAME]=950259  
+
