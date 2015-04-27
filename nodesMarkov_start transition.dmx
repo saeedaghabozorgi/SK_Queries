@@ -1,0 +1,10 @@
+
+-- to find the start transition matrix value
+SELECT flattened  NODE_TYPE,NODE_UNIQUE_NAME,[PARENT_UNIQUE_NAME],
+(SELECT ATTRIBUTE_VALUE AS [BU],
+[Support] AS [Sequence Support], 
+[Probability] AS [Sequence Probability]
+FROM NODE_DISTRIBUTION) AS t
+from [Donation_BU].CONTENT
+WHERE NODE_TYPE = 13
+AND [PARENT_UNIQUE_NAME] = 0
