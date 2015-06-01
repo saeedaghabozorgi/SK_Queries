@@ -5,6 +5,6 @@ SELECT flattened  NODE_TYPE,NODE_UNIQUE_NAME,[PARENT_UNIQUE_NAME],
 [Support] AS [Sequence Support], 
 [Probability] AS [Sequence Probability]
 FROM NODE_DISTRIBUTION) AS t
-from [Donation_BU].CONTENT
+from [M_Cons_Tran_Intrac_pure].CONTENT
 WHERE NODE_TYPE = 13
 AND [PARENT_UNIQUE_NAME] = 0

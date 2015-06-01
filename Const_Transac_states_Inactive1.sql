@@ -1,8 +1,7 @@
-/* *******************  Prepared by Saee, 16/4/15, 
-to find the states of donations without interactions  *****************
-***************************************************************************************
-*/
-
+/* *******************  Prepared by Saeed, 16/4/15, ********************/ 
+/* *******************  updated by Saeed, 30/4/15, ********************/ 
+/****************** to find the states of donations without interactions/ but with inactives******************/
+/*****************************************************************************************/
 
 drop table #1
 
@@ -68,7 +67,6 @@ from [ConversionMapping].[dbo].[saeed_donation_states_inactive]
 
 
 --To test
-
 select * from [ConversionMapping].[dbo].[saeed_donation_states_inactive]  
 where CONSTITUENTLOOKUPID='174572'
 

@@ -1,25 +1,25 @@
-EXEC sp_addlinkedserver
-@server='DM_LINKED_LOCAL',    -- local SQL name given to the linked server
-@srvproduct='',         -- not used (any value will do)
-@provider='MSOLAP',     -- Analysis Services OLE DB provider
-@datasrc='SKF100539\SKF_MINING',   -- Analysis Server name (machine name)
-@catalog='MarkovModel'   -- default catalog/database
+--EXEC sp_addlinkedserver
+--@server='DM_LINKED_LOCAL',    -- local SQL name given to the linked server
+--@srvproduct='',         -- not used (any value will do)
+--@provider='MSOLAP',     -- Analysis Services OLE DB provider
+--@datasrc='SKF100539\SKF_MINING',   -- Analysis Server name (machine name)
+--@catalog='MarkovModel'   -- default catalog/database
 
 
 
 
 drop table #2
 select NODE_UNIQUE_NAME as name,[t.ST] as ST,[t.Sequence Probability] as pr
-into #2
+--into #2
 from  OPENQUERY(DM_LINKED_LOCAL,
  'SELECT flattened  NODE_TYPE,NODE_UNIQUE_NAME,[PARENT_UNIQUE_NAME],
 (SELECT ATTRIBUTE_VALUE AS [ST],
 [Support] AS [Sequence Support], 
 [Probability] AS [Sequence Probability]
 FROM NODE_DISTRIBUTION) AS t
-from [Donation States Inactive].CONTENT
+from [DM Donation_Tran_Intrac_pure].CONTENT
 WHERE NODE_TYPE = 14
-AND [PARENT_UNIQUE_NAME] = ''688117''' )
+AND [PARENT_UNIQUE_NAME] = ''753652''' )
 
 
 
