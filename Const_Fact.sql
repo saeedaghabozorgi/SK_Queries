@@ -39,7 +39,20 @@ update #Bio set gender='Male' where Title  in ('Mr.','Brother','Father') and (ge
 --select distinct [CONSTITUENTADDRESSTYPE] from #Bio
 --select  * from #Bio where  CONSTITUENTLOOKUPID='70434'
 -- select  maritalstatus, count(maritalstatus) from #Bio group by maritalstatus
---------------------------------------------------------------------
+-----Address---------------------------------------------------------------
+
+IF OBJECT_ID('tempdb..#CAN_DATA') IS NOT NULL  DROP TABLE #CAN_DATA;
+WITH CTE
+AS
+(
+      SELECT LEFT(CANADA.PostalCode,3) + ' ' + RIGHT(CANADA.PostalCode,3) AS POST_CODE, CANADA.Latitude, CANADA.Longitude
+                        , ROW_NUMBER() OVER (PARTITION BY LEFT(CANADA.PostalCode,3) + ' ' + RIGHT(CANADA.PostalCode,3) ORDER BY CANADA.Latitude ) AS FIRST_ROW
+                  FROM [ConversionMapping].dbo.[CanData] AS CANADA 
+) SELECT POST_CODE,     Latitude,Longitude
+      INTO #CAN_DATA    
+      FROM  CTE
+      WHERE       FIRST_ROW = 1;
+
 
 IF OBJECT_ID('tempdb..#AddDet') IS NOT NULL DROP TABLE #AddDet  --Remove dbo here 
 select *  
@@ -50,6 +63,9 @@ select CONSTITUENT.CONSTITUENTDIMID
 	,CONSTITUENT.CONSTITUENTLOOKUPID
 	,CONSTITUENT.[PRIMARYADDRESSCITY]
     ,CONSTITUENT.[PRIMARYADDRESSSTATE]
+	,LEFT(CONSTITUENT.PRIMARYADDRESSPOSTCODE,3) as FSA
+	, #CAN_DATA.Longitude
+	,#CAN_DATA.Latitude
 	, ADD_TYPE.CONSTITUENTADDRESSTYPE
 	, ADD_DETAILS.ISCONFIDENTIAL
 
@@ -60,6 +76,8 @@ inner join [ECSKF_RPT_BBDW].[BBDW].[DIM_CONSTITUENTADDRESSTYPE] as ADD_TYPE
 on b.CONSTITUENTADDRESSTYPEDIMID=ADD_TYPE.CONSTITUENTADDRESSTYPEDIMID
 left outer join [ECSKF_RPT_BBDW].[BBDW].[DIM_CONSTITUENTADDRESSFLAG] as ADD_DETAILS
 on ADD_DETAILS.[CONSTITUENTADDRESSFLAGDIMID] = CONSTITUENT.[CONSTITUENTADDRESSFLAGDIMID]
+left outer join #CAN_DATA
+on CONSTITUENT.PRIMARYADDRESSPOSTCODE=#CAN_DATA.POST_CODE
 ) as SRC
 Pivot
 (
@@ -245,9 +263,9 @@ PIVOT
  count(BUSINESSUNIT)
 FOR BUSINESSUNIT IN ([Major Gifts],[SKF],[Corporate Partnerships],[Direct Marketing],[Events])
 ) as pivot_table
---------------------------------------------------------------------------
+----Houshold----------------------------------------------------------------------
 Print ('Creating Table Household')
-IF OBJECT_ID('tempdb..#Household') IS NOT NULL DROP TABLE #Household  --Remove dbo here 
+IF OBJECT_ID('tempdb..#Household') IS NOT NULL DROP TABLE #Household;  --Remove dbo here 
 WITH HouseholdCount AS
 (
       SELECT HOUSEHOLDID, COUNT(*) AS HHCOUNT FROM [KYDSPRDDB30].[ECSKF].[dbo].[CONSTITUENTHOUSEHOLD]
@@ -263,6 +281,7 @@ WITH HouseholdCount AS
                         ON FIRST_CONSTITUENT.CONSTITUENTDIMID = RELATIONSHIPS.CONSTITUENTDIMID
                   INNER JOIN [ECSKF_RPT_BBDW].[BBDW].[DIM_CONSTITUENTRELATIONSHIPFLAG] RELATIONSHIP_FLAGS 
                         ON RELATIONSHIP_FLAGS.CONSTITUENTRELATIONSHIPFLAGDIMID = RELATIONSHIPS.CONSTITUENTRELATIONSHIPFLAGDIMID
+						where RELATIONSHIP_FLAGS.ISSPOUSE = 1
 )
 ,RESULT AS
 (
@@ -281,7 +300,7 @@ WITH HouseholdCount AS
                   LEFT JOIN RELATIONS
                         ON RELATIONS.CONSTITUENTDIMID = CONSTITUENTS.CONSTITUENTDIMID
 )SELECT CONSTITUENTDIMID, CONSTITUENTLOOKUPID, HasHousehold, HouseholdCount,ISSPOUSE
-      INTO SKF_Tableau.dbo.HouseholdCount
+ into #Household
       FROM RESULT
 EXCEPT 
  SELECT CONSTITUENTDIMID, CONSTITUENTLOOKUPID, HasHousehold, HouseholdCount,ISSPOUSE
@@ -315,8 +334,90 @@ pivot
 count(InteractionType) for InteractionType in ([In Person],[Phone],[Email])
 )  as pivottable
 
-update #INTRACT set T_INTRACT=[In Person]+[Phone]+[Email] 
+update #INTRACT set T_INTRACT=[In Person]+[Phone]+[Email] ;
 --select * from #INTRACT
+-----RG---------------------------------------------------------------------
+Print ('Creating Table RG')
+IF OBJECT_ID('tempdb..#RG') IS NOT NULL DROP TABLE #RG;  --Remove dbo here 
+WITH RC_STATES AS 
+ (
+SELECT REVENUE.CONSTITUENTDIMID, RC_ATTRIBUTE.RevenueSysId
+            --,DATENAME(MM,StartDATE)as TerminatinDate
+            ,CASE
+                  WHEN RC_ATTRIBUTE.Value LIKE 'Hold%' THEN 'Hold'
+                  WHEN RC_ATTRIBUTE.Value LIKE '%Donor%' THEN 'Donor'
+                  ELSE 'Terminated' 
+            END AS [STATE]
+            , ROW_NUMBER() OVER (PARTITION BY REVENUE.CONSTITUENTDIMID, RC_ATTRIBUTE.RevenueSysId ORDER BY RC_ATTRIBUTE.StartDATE DESC) AS ROW
+      FROM [ECSKF_RPT_BBDW].[dbo].[SKF_RPT_Attributed_EXT] RC_ATTRIBUTE 
+            INNER JOIN  [ECSKF_RPT_BBDW].BBDW.FACT_REVENUE AS REVENUE
+                  ON REVENUE.REVENUESYSTEMID = RC_ATTRIBUTE.RevenueSysId
+            INNER JOIN [ECSKF_RPT_BBDW].BBDW.DIM_REVENUECODE CODES 
+                   ON REVENUE.REVENUECODEDIMID = CODES.REVENUECODEDIMID
+      WHERE CODES.REVENUETRANSACTIONTYPECODE = 2 --and REVENUE.CONSTITUENTDIMID = '1537672'
+)
+, TERMINATED AS 
+(
+      SELECT CONSTITUENTDIMID, RevenueSysId,[STATE]
+            FROM  RC_STATES
+            WHERE ROW = 1
+) 
+, ALL_RC AS 
+(
+      SELECT REVENUE.CONSTITUENTDIMID, COUNT(REVENUE.CONSTITUENTDIMID) AS RC_COUNT
+            FROM [ECSKF_RPT_BBDW].BBDW.FACT_FINANCIALTRANSACTION AS REVENUE
+            INNER JOIN  [ECSKF_RPT_BBDW].BBDW.FACT_FINANCIALTRANSACTIONLINEITEM AS REVENUE_SPLIT
+                  ON REVENUE.FINANCIALTRANSACTIONFACTID = REVENUE_SPLIT.FINANCIALTRANSACTIONFACTID
+            INNER JOIN [ECSKF_RPT_BBDW].BBDW.DIM_REVENUECODE CODES 
+                   ON REVENUE_SPLIT.REVENUECODEDIMID = CODES.REVENUECODEDIMID
+            WHERE CODES.REVENUETRANSACTIONTYPECODE = 2 
+            --AND REVENUE.CONSTITUENTDIMID = '1291049'      
+            GROUP BY REVENUE.CONSTITUENTDIMID
+)
+SELECT DISTINCT CONSTITUENTS.CONSTITUENTDIMID, CONSTITUENTS.CONSTITUENTLOOKUPID,ALL_RC.RC_COUNT
+            ,ALL_RC.RC_COUNT - ISNULL(
+                  (SELECT COUNT(*) 
+                        FROM TERMINATED AS T 
+                        WHERE T.CONSTITUENTDIMID = CONSTITUENTS.CONSTITUENTDIMID --AND TERMINATED.ROW = 1      
+            ),0)AS ACTIVE_COUNT
+            ,(
+                  SELECT COUNT(*) 
+                        FROM TERMINATED AS T 
+                        WHERE T.CONSTITUENTDIMID = CONSTITUENTS.CONSTITUENTDIMID AND T.[STATE] = 'Hold'
+            )AS HOLD_COUNT
+            ,(
+                  SELECT COUNT(*) 
+                        FROM TERMINATED AS T 
+                        WHERE T.CONSTITUENTDIMID = CONSTITUENTS.CONSTITUENTDIMID AND T.[STATE] = 'Donor' 
+            )AS DONOR_TERMINATED_COUNT
+            ,(
+                  SELECT COUNT(*) 
+                        FROM TERMINATED AS T 
+                        WHERE T.CONSTITUENTDIMID = CONSTITUENTS.CONSTITUENTDIMID AND T.[STATE] = 'Terminated'
+            )AS SYSTEM_TERMINATED_COUNT         
+      into #RG
+	  FROM TERMINATED
+            INNER JOIN [ECSKF_RPT_BBDW].BBDW.DIM_CONSTITUENT AS CONSTITUENTS
+                  ON CONSTITUENTS.CONSTITUENTDIMID = TERMINATED.CONSTITUENTDIMID
+            INNER JOIN ALL_RC 
+                  ON ALL_RC.CONSTITUENTDIMID = CONSTITUENTS.CONSTITUENTDIMID
+---- Opportunity ----------------------------------------------------------
+
+
+select * from ( select c.CONSTITUENTDIMID,a.OPPORTUNITYSTATUS from 
+[ECSKF_RPT_BBDW].[BBDW].DIM_CONSTITUENT as c
+inner join 
+[ECSKF_RPT_BBDW].[BBDW].FACT_OPPORTUNITY a
+on a.CONSTITUENTDIMID=c.CONSTITUENTDIMID
+inner join [ECSKF_RPT_BBDW].[BBDW].DIM_PROSPECTPLAN as b
+on a.PROSPECTPLANDIMID=b.PROSPECTPLANDIMID
+where OPPORTUNITYTYPE='Major Gifts'
+) as resurce_table
+pivot 
+(
+count(OPPORTUNITYSTATUS) for OPPORTUNITYSTATUS in (Unqualified,Qualified,[Response pending],Accepted,Canceled,Rejected)
+)  as pivottable
+
 
 
 -----MG---------------------------------------------------------------------
@@ -350,12 +451,15 @@ SELECT 	CONSTITUENTLOOKUPID, min(FISCALYEAR) as F_MGIFT_DATE, max(FISCALYEAR) as
 WHERE SUM_AMOUNT>9999
 group by CONSTITUENTLOOKUPID
 
+	  ----,CONSTITUENT.AGE-(2015-YEAR(REVENUE.FINANCIALTRANSACTIONDATE)) as AGEPAY
+
 --select * from #MG where CONSTITUENTLOOKUPID='91792'
 --select * from #ISMG where CONSTITUENTLOOKUPID='91792'
+
+
 ---------------------------------------------------------------------------
 Print ('Joining')
---IF OBJECT_ID('tempdb..[saeed_Constituents]') IS NOT NULL 
-DROP TABLE [ConversionMapping].[dbo].[saeed_Constituents]
+IF OBJECT_ID('[ConversionMapping].[dbo].[saeed_Constituents]') IS NOT NULL DROP TABLE [ConversionMapping].[dbo].[saeed_Constituents]
 Select 
 #Bio.CONSTITUENTLOOKUPID,
 #Bio.CONSTITUENTDIMID,
@@ -383,24 +487,27 @@ Select
 ,#AddDet.[ISCONFIDENTIAL]
 ,#AddDet.Home
 ,#AddDet.Business
+,#AddDet.FSA
+,#AddDet.Longitude
+,#AddDet.Latitude
 ,#intr.Interest
-,#APPEAL.APEAL_COUNT
-,#APPEAL.APEAL_COUNT_CP
-,#APPEAL.APEAL_COUNT_DM
-,#APPEAL.APEAL_COUNT_DTD
-,#APPEAL.APEAL_COUNT_GenDon
-,#APPEAL.APEAL_COUNT_lotry
-,#REVEN1.H_PG
-,#REVEN1.H_PLG
-,#REVEN1.H_RG
-,#REVEN1.P_DON
-,#REVEN1.P_PLG
-,#REVEN1.P_RG
-,#REVEN1.T_REV
+,isnull(#APPEAL.APEAL_COUNT,0) as APEAL_COUNT
+,isnull(#APPEAL.APEAL_COUNT_CP,0) as APEAL_COUNT_CP
+,isnull(#APPEAL.APEAL_COUNT_DM,0) as APEAL_COUNT_DM
+,isnull(#APPEAL.APEAL_COUNT_DTD,0) as APEAL_COUNT_DTD
+,isnull(#APPEAL.APEAL_COUNT_GenDon,0) as APEAL_COUNT_GenDon
+,isnull(#APPEAL.APEAL_COUNT_lotry,0) as APEAL_COUNT_lotry
+,isnull(#REVEN1.H_PG,0) as H_PG
+,isnull(#REVEN1.H_PLG,0) as H_PLG
+,isnull(#REVEN1.H_RG,0) as H_RG
+,isnull(#REVEN1.P_DON,0) as P_DON
+,isnull(#REVEN1.P_PLG,0) as P_PLG
+,isnull(#REVEN1.P_RG,0) as P_RG
+,isnull(#REVEN1.T_REV,0) as T_REV
 ,#REVEN2.GFT_TCOUNT
 ,#REVEN2.FIRST_REV_DATE
 ,#REVEN2.LAST_REV_DATE
-,#REVEN2.PAYLENGTH
+,isnull(#REVEN2.PAYLENGTH,0) as PAYLENGTH
 ,#CONSTITUENCY.IsCampaignCabinet
 ,#CONSTITUENCY.IsChairsCouncil
 ,#CONSTITUENCY.[IsCommiteeMember]
@@ -408,26 +515,34 @@ Select
 ,#CONSTITUENCY.IsFriendFamilyOfPatient
 ,#CONSTITUENCY.IsGrandparentOfPatient
 ,#CONSTITUENCY.IsParentofPatient
-,#CONS_BUni.[Corporate Partnerships]
-,#CONS_BUni.[Direct Marketing]
-,#CONS_BUni.[Events]
-,#CONS_BUni.[Major Gifts]
-,#CONS_BUni.SKF
-,#AFF.AFFLUENCEINDICATORNUMBER
-,#AFF.AFFLUENCEINDICATORASSETS
-,#AFF.BIOGRAPHICALNUMBER
+,isnull(#CONS_BUni.[Corporate Partnerships],0) as [Corporate Partnerships]
+,isnull(#CONS_BUni.[Direct Marketing],0) as [Direct Marketing]
+,isnull(#CONS_BUni.[Events],0) as [Events]
+,isnull(#CONS_BUni.[Major Gifts],0) as [Major Gifts]
+,isnull(#CONS_BUni.SKF,0) as SKF
+,isnull(#AFF.AFFLUENCEINDICATORNUMBER,0) as AFFLUENCEINDICATORNUMBER
+,isnull(#AFF.AFFLUENCEINDICATORASSETS,0) as AFFLUENCEINDICATORASSETS
+,isnull(#AFF.BIOGRAPHICALNUMBER,0) as BIOGRAPHICALNUMBER
 ,#AFF.BUSINESSOWNERSHIPASSETS
 ,#AFF.BUSINESSOWNERSHIPNUMBER
 ,#AFF.NONPROFITAFFILIATIONNUMBER
 ,#AFF.PHILANTHROPICGIFTNUMBER
 ,#AFF.REALESTATENUMBER
+,#Household.HasHousehold
+,#Household.HouseholdCount
+,#Household.ISSPOUSE
 ,#Relationsip.RelationshipCount
-,#INTRACT.Email
-,#INTRACT.[In Person]
-,#INTRACT.Phone
-,#INTRACT.T_INTRACT
-,#ISMG.MGCOUNT
-,#ISMG.MGMAX
+,isnull(#INTRACT.Email,0) as Email
+,isnull(#INTRACT.[In Person],0) as [In Person]
+,isnull(#INTRACT.Phone,0) as Phone
+,isnull(#INTRACT.T_INTRACT,0) as T_INTRACT
+,isnull(#RG.ACTIVE_COUNT,0) as RG_ACTIVE_COUNT
+,isnull(#RG.RC_COUNT,0) as RC_COUNT
+,isnull(#RG.HOLD_COUNT,0) as HOLD_COUNT
+,isnull(#RG.DONOR_TERMINATED_COUNT,0) as DONOR_TERMINATED_COUNT
+,isnull(#RG.SYSTEM_TERMINATED_COUNT,0) as SYSTEM_TERMINATED_COUNT
+,isnull(#ISMG.MGCOUNT,0) MGCOUNT
+,isnull(#ISMG.MGMAX,0) as MGMAX
 ,CASE WHEN ISNUMERIC(#ISMG.MGCOUNT)>0 THEN 'Yes' ELSE 'No' END as ISMG
 into  [ConversionMapping].[dbo].[saeed_Constituents]
 from #Bio
@@ -447,42 +562,41 @@ left outer join #CONS_BUni
 on #Bio.CONSTITUENTLOOKUPID=#CONS_BUni.CONSTITUENTLOOKUPID
 left outer join #AFF
 on #Bio.CONSTITUENTLOOKUPID = #AFF.CONSTITUENTLOOKUPID
+left outer join #Household
+on #Bio.CONSTITUENTLOOKUPID= #Household.CONSTITUENTLOOKUPID
 left outer join #Relationsip
 on #Bio.CONSTITUENTLOOKUPID =#Relationsip.CONSTITUENTLOOKUPID
 left outer join #INTRACT
 on #Bio.CONSTITUENTDIMID=#INTRACT.CONSTITUENTDIMID
 left outer join #ISMG
 on #Bio.CONSTITUENTLOOKUPID= #ISMG.CONSTITUENTLOOKUPID
-where FIRST_REV_DATE>'1990-01-01'
-and FIRST_REV_DATE<'2015-06-01'
-and LAST_REV_DATE>'2000-01-01'
-and LAST_REV_DATE<'2015-06-01'
+left outer join #RG
+on #Bio.CONSTITUENTLOOKUPID=#RG.CONSTITUENTLOOKUPID
+where -- FIRST_REV_DATE>'1990-01-01' and FIRST_REV_DATE<'2015-06-01' and 
+LAST_REV_DATE>'2000-01-01' and LAST_REV_DATE<'2015-06-01'
 
 
 update  [ConversionMapping].[dbo].[saeed_Constituents]
 set age=null where age<10 or age>100
-update  [ConversionMapping].[dbo].[saeed_Constituents]
-set [Major Gifts]=0 where [Major Gifts] is null
-update  [ConversionMapping].[dbo].[saeed_Constituents]
-set [Corporate Partnerships]=0 where [Corporate Partnerships] is null
-update  [ConversionMapping].[dbo].[saeed_Constituents]
-set [Direct Marketing]=0 where [Direct Marketing] is null
-update  [ConversionMapping].[dbo].[saeed_Constituents]
-set [Events]=0 where [Events] is null
-update  [ConversionMapping].[dbo].[saeed_Constituents]
-set SKF=0 where SKF is null
-
 
 --------------------------------------------------------------------
 select distinct(AFFLUENCEINDICATORNUMBER) from [ConversionMapping].[dbo].[saeed_Constituents]
-select distinct([Direct Marketing]) from [ConversionMapping].[dbo].[saeed_Constituents]
+select distinct(DONOR_TERMINATED_COUNT) from [ConversionMapping].[dbo].[saeed_Constituents]
+
+
 
 select * from [ConversionMapping].[dbo].[saeed_Constituents]
-where CONSTITUENTLOOKUPID='70434'
+where CONSTITUENTLOOKUPID='299335'
 
 select count(*) from [ConversionMapping].[dbo].[saeed_Constituents]
 where CONSTITUENTLOOKUPID='70434'
 
+
+
+
+select CONSTITUENTLOOKUPID,count(CONSTITUENTLOOKUPID) from [ConversionMapping].[dbo].[saeed_Constituents]
+group by CONSTITUENTLOOKUPID
+having count(CONSTITUENTLOOKUPID)>1
 ----------------------------------------------------
 
 
